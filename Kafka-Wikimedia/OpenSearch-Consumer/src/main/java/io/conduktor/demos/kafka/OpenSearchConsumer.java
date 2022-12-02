@@ -1,5 +1,6 @@
 package io.conduktor.demos.kafka;
 
+import com.google.gson.JsonParser;
 import org.apache.http.HttpHost;
 import org.apache.http.auth.AuthScope;
 import org.apache.http.auth.UsernamePasswordCredentials;
@@ -11,6 +12,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.common.serialization.StringDeserializer;
+import org.opensearch.action.bulk.BulkRequest;
 import org.opensearch.action.index.IndexRequest;
 import org.opensearch.action.index.IndexResponse;
 import org.opensearch.client.RequestOptions;
@@ -74,9 +76,15 @@ public class OpenSearchConsumer {
         properties.setProperty(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
         properties.setProperty(ConsumerConfig.GROUP_ID_CONFIG, groupId);
         properties.setProperty(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "latest");
+        properties.setProperty(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
 
         // create consumer
         return new KafkaConsumer<>(properties);
+    };
+
+    public static String extractId(String json){
+        // gson library
+        return JsonParser.parseString(json).getAsJsonObject().get("meta").getAsJsonObject().get("id").getAsString();
     };
 
     public static void main(String[] args) throws IOException {
@@ -112,14 +120,35 @@ public class OpenSearchConsumer {
                 int recordCount = records.count();
                 log.info("Received " + recordCount + "record(s)");
 
+                BulkRequest bulkRequest = new BulkRequest();
+
                 for (ConsumerRecord<String, String> record: records) {
                     // send the record into open search
-                    IndexRequest indexRequest = new IndexRequest("wikimedia").source(record.value(), XContentType.JSON);
 
-                    IndexResponse response = openSearchClient.index(indexRequest, RequestOptions.DEFAULT);
+                    try {
+                        // extract UID from the JSON values for idempontent consumers
+                        String id = extractId(record.value());
 
-                    log.info(response.getId());
+                        IndexRequest indexRequest = new IndexRequest("wikimedia").source(record.value(), XContentType.JSON).id(id);
+
+                        IndexResponse response = openSearchClient.index(indexRequest, RequestOptions.DEFAULT);
+
+//                        log.info(response.getId());
+
+                        bulkRequest.add(indexRequest);
+
+                    } catch (Exception e) {
+
+                    }
                 }
+
+
+
+
+                // commit offsets after the whole batch is consumed
+                consumer.commitSync();
+                log.info("Offests have been committed");
+
             }
 
         }
